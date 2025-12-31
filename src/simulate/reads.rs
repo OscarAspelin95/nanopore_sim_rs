@@ -5,8 +5,8 @@ use crate::args::App;
 use crate::errors::SimError;
 use crate::simulate::get_phred_counts;
 use crate::utils::mean_error_from_phred;
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use needletail::parse_fastx_file;
@@ -125,13 +125,16 @@ pub fn simulate_reads(args: App) -> Result<(), SimError> {
             .unwrap_or(1)
             .min(num_fasta_records);
 
-        // Here, we want to randomize fasta records from provided fasta file.
+        // Choose a random number of sequences from the fasta file.
         let random_fasta_sequences = fasta_records.choose_multiple(&mut rng, num_sequences);
 
-        // For each sequence, we randomly choose how many reads to simulate.
-        // Here, we actually want to loop over each set of fasta sequences.
+        // Simluate a random number of reads per randomly chosen sequence.
         for fasta_record in random_fasta_sequences {
-            let num_reads = args.reads_per_sequence.choose(&mut rng).copied().unwrap_or(1);
+            let num_reads = args
+                .reads_per_sequence
+                .choose(&mut rng)
+                .copied()
+                .unwrap_or(1);
 
             for nread in 1..num_reads + 1 {
                 let read_len: usize = fasta_record.sequence.len();
@@ -163,7 +166,9 @@ pub fn simulate_reads(args: App) -> Result<(), SimError> {
                     };
 
                     // Safe: choices always has 3 elements
-                    let new_base = choices.choose(&mut rng).expect("choices array is non-empty");
+                    let new_base = choices
+                        .choose(&mut rng)
+                        .expect("choices array is non-empty");
                     new_sequence[*base_index] = *new_base
                 }
 

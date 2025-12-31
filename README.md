@@ -1,5 +1,8 @@
 # nanopore_sim_rs
-Simulate full length nanopore amplicon reads using a first order Markov chain like algorithm.
+Simulate full length nanopore amplicon reads.
+
+- Uses a Markov chain like algorithm to simulate phred scores.
+- Introduces random errors based on the number of expected errors from the simulated phred scores.
 
 ## Requirements
 - Linux OS (Ubuntu 24.04.2)
@@ -28,6 +31,6 @@ Optional arguments:
 
 - `--num-sequences` - how many fasta sequences to model reads from for a given sample. If providing multiple values `--num-sequences n1 n2 n3...`, a value will be randomized for each sample.
 
-- `--reads-per-sequence` - how many reads to choose for a given sequence and sample. If providing multiple values `--reads-per-sequence r1 r2 r3 ...`, a value will be randomized.
+- `--reads-per-sequence` - how many reads to choose for a given sequence and sample. If providing multiple values `--reads-per-sequence r1 r2 r3 ...`, a value will be randomized (per sequence) from these values.
 
 - `--outdir` - outputs one fastq file per sample with an associated .tsv file containing read names, mean error rates and number of introduced substitutions.

@@ -2,6 +2,11 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
+#[clap(
+    author,
+    version,
+    about = "Simulate full length nanopore amplicon reads using a Markov chain like algorithm"
+)]
 pub struct App {
     #[clap(long, required=true, num_args = 1.., value_delimiter = ' ')]
     pub template_fastq: Vec<PathBuf>,
