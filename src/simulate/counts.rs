@@ -1,10 +1,10 @@
-use anyhow::Result;
+use crate::errors::SimError;
 use needletail::parse_fastx_file;
 use std::path::PathBuf;
 
-const PHRED_OFFSET: u8 = 33;
-
-pub fn get_phred_counts(fastqs: Vec<PathBuf>) -> Result<([usize; 128], [[usize; 128]; 128])> {
+pub fn get_phred_counts(
+    fastqs: Vec<PathBuf>,
+) -> Result<([usize; 128], [[usize; 128]; 128]), SimError> {
     // We assume phred scores lie within printable ASCII characters (values >= 33 before phred offset).
     let mut initial_counts = [0_usize; 128];
 
@@ -24,10 +24,15 @@ pub fn get_phred_counts(fastqs: Vec<PathBuf>) -> Result<([usize; 128], [[usize; 
                 Err(_) => continue,
             };
 
-            let qual = record.qual().unwrap();
+            let qual = match record.qual() {
+                Some(q) => q,
+                None => continue,
+            };
 
             // --- Initial probabilities
-            let q_begin = qual.first().unwrap();
+            let Some(q_begin) = qual.first() else {
+                continue;
+            };
             initial_counts[*q_begin as usize] += 1;
 
             // --- Transitional probabilities

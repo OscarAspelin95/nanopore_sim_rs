@@ -2,11 +2,11 @@ use std::fs::create_dir_all;
 use std::time::Duration;
 
 use crate::args::App;
+use crate::errors::SimError;
 use crate::simulate::get_phred_counts;
 use crate::utils::mean_error_from_phred;
-use anyhow::Result;
-use flate2::Compression;
 use flate2::write::GzEncoder;
+use flate2::Compression;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use needletail::parse_fastx_file;
@@ -25,7 +25,7 @@ fn simulate_phred(
     read_len: usize,
     initial_counts: &[usize; 128],
     transitional_counts: &[[usize; 128]; 128],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, SimError> {
     let mut phreds: Vec<u8> = Vec::with_capacity(read_len);
 
     let choices: Vec<usize> = (0..128).collect();
@@ -34,7 +34,7 @@ fn simulate_phred(
     let mut rng = rng();
     let p = choices
         .choose_weighted(&mut rng, |i| initial_counts[*i])
-        .unwrap();
+        .map_err(|_| SimError::EmptyPhredCounts)?;
 
     let mut previous = *p as u8;
     phreds.push(previous);
@@ -43,18 +43,18 @@ fn simulate_phred(
         let new_phred_counts = transitional_counts[previous as usize];
 
         let new_phred = choices
-            .choose_weighted(&mut rng, |i| new_phred_counts[*i]).copied()
-            .unwrap_or_else(|_| panic!("previous: {}, new_choices: {:?}",
-                    previous, new_phred_counts));
+            .choose_weighted(&mut rng, |i| new_phred_counts[*i])
+            .copied()
+            .map_err(|_| SimError::InvalidMarkovState(previous))?;
 
         phreds.push(new_phred as u8);
         previous = new_phred as u8;
     }
 
-    phreds
+    Ok(phreds)
 }
 
-fn load_fasta<'a>(template_fasta: &PathBuf) -> Result<Vec<FastaRecord>> {
+fn load_fasta(template_fasta: &PathBuf) -> Result<Vec<FastaRecord>, SimError> {
     let mut fasta_reader = parse_fastx_file(template_fasta)?;
 
     let mut fasta_records: Vec<FastaRecord> = Vec::new();
@@ -74,9 +74,9 @@ fn load_fasta<'a>(template_fasta: &PathBuf) -> Result<Vec<FastaRecord>> {
     Ok(fasta_records)
 }
 
-pub fn simulate_reads(args: App) -> Result<()> {
+pub fn simulate_reads(args: App) -> Result<(), SimError> {
     info!("Generating phred counts from fastq files...");
-    let (initial_counts, transitional_counts) = get_phred_counts(args.template_fastq).unwrap();
+    let (initial_counts, transitional_counts) = get_phred_counts(args.template_fastq)?;
 
     info!("Loading template fasta...");
     let fasta_records = load_fasta(&args.template_fasta)?;
@@ -85,7 +85,8 @@ pub fn simulate_reads(args: App) -> Result<()> {
     // Number of fastq files to simulate.
     let samples: Vec<usize> = (1..args.num_samples + 1).collect();
 
-    create_dir_all(&args.outdir).unwrap();
+    create_dir_all(&args.outdir)
+        .map_err(|_| SimError::OutputDirectoryError(args.outdir.clone()))?;
 
     // Simulate reads in parallel.
     info!("Simulating reads...");
@@ -95,7 +96,7 @@ pub fn simulate_reads(args: App) -> Result<()> {
         "{spinner:.blue} [{elapsed_precise}]",
     )?);
 
-    samples.par_iter().for_each(|sample_index| {
+    samples.par_iter().try_for_each(|sample_index| {
         // Thread specific rng.
         let mut rng = rng();
 
@@ -105,7 +106,7 @@ pub fn simulate_reads(args: App) -> Result<()> {
 
         // We'll write to a different file per thread so this is safe.
         let mut fastq_writer = BufWriter::new(GzEncoder::new(
-            File::create(fastq_out).unwrap(),
+            File::create(&fastq_out)?,
             Compression::fast(),
         ));
 
@@ -113,28 +114,30 @@ pub fn simulate_reads(args: App) -> Result<()> {
         let mut read_tsv = args.outdir.clone();
         read_tsv.push(format!("sample_{}.tsv", sample_index));
 
-        let mut read_tsv_writer = BufWriter::new(File::create(read_tsv).unwrap());
-        read_tsv_writer
-            .write_all(b"read_name\tmean_error\tnum_substitutions\n")
-            .unwrap();
+        let mut read_tsv_writer = BufWriter::new(File::create(&read_tsv)?);
+        read_tsv_writer.write_all(b"read_name\tmean_error\tnum_substitutions\n")?;
 
         // Randomly choose how many sequences to simulate reads from.
-        let mut num_sequences = args.num_sequences.choose(&mut rng).unwrap();
-        num_sequences = num_sequences.min(&num_fasta_records);
+        let num_sequences = args
+            .num_sequences
+            .choose(&mut rng)
+            .copied()
+            .unwrap_or(1)
+            .min(num_fasta_records);
 
         // Here, we want to randomize fasta records from provided fasta file.
-        let random_fasta_sequences = fasta_records.choose_multiple(&mut rng, *num_sequences);
+        let random_fasta_sequences = fasta_records.choose_multiple(&mut rng, num_sequences);
 
         // For each sequence, we randomly choose how many reads to simulate.
         // Here, we actually want to loop over each set of fasta sequences.
         for fasta_record in random_fasta_sequences {
-            let num_reads = args.reads_per_sequence.choose(&mut rng).unwrap();
+            let num_reads = args.reads_per_sequence.choose(&mut rng).copied().unwrap_or(1);
 
-            for nread in 1..*num_reads + 1 {
+            for nread in 1..num_reads + 1 {
                 let read_len: usize = fasta_record.sequence.len();
                 let read_id = format!("{}|{}", fasta_record.id, nread);
 
-                let phred = simulate_phred(read_len, &initial_counts, &transitional_counts);
+                let phred = simulate_phred(read_len, &initial_counts, &transitional_counts)?;
 
                 let mean_error = mean_error_from_phred(&phred[..]);
 
@@ -159,36 +162,33 @@ pub fn simulate_reads(args: App) -> Result<()> {
                         _ => continue,
                     };
 
-                    let new_base = choices.choose(&mut rng).unwrap();
+                    // Safe: choices always has 3 elements
+                    let new_base = choices.choose(&mut rng).expect("choices array is non-empty");
                     new_sequence[*base_index] = *new_base
                 }
 
                 // Write simulated read to fastq file.
-                fastq_writer.write_all(b"@").unwrap();
-                fastq_writer.write_all(read_id.as_bytes()).unwrap();
-                fastq_writer.write_all(b"\n").unwrap();
-                fastq_writer.write_all(&fasta_record.sequence).unwrap();
-                fastq_writer.write_all(b"\n").unwrap();
-                fastq_writer.write_all(&phred[..]).unwrap();
-                fastq_writer.write_all(b"\n").unwrap();
+                write!(
+                    fastq_writer,
+                    "@{}\n{}\n+\n{}\n",
+                    read_id,
+                    String::from_utf8_lossy(&new_sequence),
+                    String::from_utf8_lossy(&phred)
+                )?;
 
                 // Write read info
-                read_tsv_writer.write_all(read_id.as_bytes()).unwrap();
-                read_tsv_writer.write_all(b"\t").unwrap();
-                read_tsv_writer
-                    .write_all(mean_error.to_string().as_bytes())
-                    .unwrap();
-                read_tsv_writer.write_all(b"\t").unwrap();
-                read_tsv_writer
-                    .write_all(expected_num_erroneous_bases.to_string().as_bytes())
-                    .unwrap();
-                read_tsv_writer.write_all(b"\n").unwrap();
+                writeln!(
+                    read_tsv_writer,
+                    "{}\t{}\t{}",
+                    read_id, mean_error, expected_num_erroneous_bases
+                )?;
             }
         }
 
-        fastq_writer.flush().unwrap();
-        read_tsv_writer.flush().unwrap();
-    });
+        fastq_writer.flush()?;
+        read_tsv_writer.flush()?;
+        Ok::<(), SimError>(())
+    })?;
 
     spinner.finish();
     Ok(())
