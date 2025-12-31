@@ -16,4 +16,4 @@ rayon = { version = "1.11.0" }
 indicatif = { version = "0.18.3" }
 
 [dev-dependencies]
-rstest = { version = "0.25" }
+rstest = { version = "0.26.1" }
