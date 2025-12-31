@@ -43,15 +43,9 @@ fn simulate_phred(
         let new_phred_counts = transitional_counts[previous as usize];
 
         let new_phred = choices
-            .choose_weighted(&mut rng, |i| new_phred_counts[*i])
-            .map(|p| *p)
-            .expect(
-                format!(
-                    "previous: {}, new_choices: {:?}",
-                    previous, new_phred_counts
-                )
-                .as_str(),
-            );
+            .choose_weighted(&mut rng, |i| new_phred_counts[*i]).copied()
+            .unwrap_or_else(|_| panic!("previous: {}, new_choices: {:?}",
+                    previous, new_phred_counts));
 
         phreds.push(new_phred as u8);
         previous = new_phred as u8;
